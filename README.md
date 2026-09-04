@@ -50,6 +50,23 @@ On the page, after `zah-editor.js`:
 That is what makes the editor's **Save** publish to the server. Without it the
 editor still works, but only in the one browser.
 
+## Settings: site-wide values the client can change
+
+Declare what the site reads, the MCP lets the client change it, and every
+product or button that reads it follows. This is how a client changes their
+booking link or phone number without a developer:
+
+```js
+settings: {
+  bookingUrl: { label: 'Where "Book" buttons go', kind: 'url',   default: process.env.BOOKING_URL },
+  phone:      { label: 'Contact phone',           kind: 'phone', default: process.env.CONTACT_PHONE },
+}
+```
+
+Kinds: `url`, `phone`, `email`, `text`. The mount returns the site object;
+read values with `site.settings()`. ZAH Pay takes `booking: () => ...` for
+exactly this. An empty value resets to the default (the env var).
+
 ## What it owns
 
 | Thing | Where |
@@ -100,6 +117,7 @@ Then: *"List the content on my homepage and change the hero headline to ..."*
 | `set_image(page, key, src, alt?)` | swap an image by URL |
 | `set_hidden(page, key, hidden)` | hide or show, nothing deleted |
 | `set_many(page, edits[])` | a batch, one version |
+| `get_settings()` / `set_setting(key, value)` | site-wide values the host declared (booking link, phone) |
 | `history()` / `revert(version)` | every version is kept; any can be restored |
 | `reset_page(page)` | drop every edit, serve the file as built |
 

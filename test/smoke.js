@@ -13,13 +13,17 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zah-site-'));
 const fixture = path.join(__dirname, 'fixture.html');
 
 const app = express();
-mount(app, {
+const site = mount(app, {
   siteId: 'fixture',
   name: 'Fixture Site',
   dataDir: tmp,
   token: TOKEN,
   adminHash: '5c4a4c1d4b3a7d1a6e4b8d0f5b0d7b8e0f9f7a3c5c2f6b3f2f0f5f2e0d3b6a9e', // not a real pair
   pages: [{ path: '/', file: fixture, root: 'main' }],
+  settings: {
+    bookingUrl: { label: 'Booking link', kind: 'url', default: 'https://default.example/book' },
+    phone: { label: 'Phone', kind: 'phone', default: '(555) 000-0000' },
+  },
 });
 app.use(express.static(__dirname));
 
@@ -89,7 +93,21 @@ const assert = (c, m) => { if (!c) { console.error('FAIL:', m); process.exit(1);
   html = await (await fetch(base + '/')).text();
   assert(html.includes('MCP on top of the snapshot'), 'MCP edit applies on top of a snapshot');
 
-  // 5. bad token
+  // 5. settings
+  const gs = JSON.parse((await client.callTool({ name: 'get_settings', arguments: {} })).content[0].text);
+  assert(gs.find((x) => x.key === 'bookingUrl').value === 'https://default.example/book', 'get_settings shows the default');
+  const ss = await client.callTool({ name: 'set_setting', arguments: { key: 'bookingUrl', value: 'https://new.example/book' } });
+  assert(!ss.isError && site.settings().bookingUrl === 'https://new.example/book', 'set_setting changes what the host reads');
+  const bad2 = await client.callTool({ name: 'set_setting', arguments: { key: 'bookingUrl', value: 'not a url' } });
+  assert(bad2.isError, 'set_setting rejects a bad url');
+  const bad3 = await client.callTool({ name: 'set_setting', arguments: { key: 'nope', value: 'x' } });
+  assert(bad3.isError, 'set_setting rejects an undeclared key');
+  const rs2 = await client.callTool({ name: 'set_setting', arguments: { key: 'bookingUrl', value: '' } });
+  assert(!rs2.isError && site.settings().bookingUrl === 'https://default.example/book', 'empty value resets to default');
+  r = await fetch(base + '/zah-site/settings', { headers: { Authorization: `Bearer ${TOKEN}` } });
+  assert(r.ok && (await r.json()).values.phone === '(555) 000-0000', 'REST settings endpoint');
+
+  // 6. bad token
   const badT = new StreamableHTTPClientTransport(new URL(base + '/zah-site/mcp'), { requestInit: { headers: { Authorization: 'Bearer nope' } } });
   let refused = false;
   try { await new Client({ name: 'x', version: '0' }).connect(badT); } catch (e) { refused = true; }

@@ -16,6 +16,12 @@
        adminHash: '<sha256 of email:password>',    // Zah Editor login, for Publish
        pages: [{ path: '/', file: path.join(__dirname, 'index.html'), root: 'main' }],
        publicUrl: process.env.PUBLIC_URL,
+       // Site-wide values the client's AI may change. Other products read
+       // them through site.settings(), so one change moves every button.
+       settings: {
+         bookingUrl: { label: 'Where "Book" buttons go', kind: 'url', default: process.env.BOOKING_URL },
+         phone:      { label: 'Contact phone', kind: 'phone', default: process.env.CONTACT_PHONE },
+       },
      });
 
    Mount it BEFORE express.static, because it serves the listed pages itself
@@ -44,8 +50,17 @@ const PREFIX = '/zah-site';
  * @property {Array<{path:string,file:string,root:string,editable?:string[]}>} pages
  * @property {(p:string)=>object|null} page
  * @property {(p:object)=>Array} list
+ * @property {() => Record<string,string>} settings   declared defaults merged with stored values
+ * @property {Record<string,{label:string,kind:string,default?:string}>} settingsSchema
  * @property {string} [publicUrl]
  */
+
+const KINDS = {
+  url: (v) => /^(https?:\/\/|mailto:|tel:|\/|#)/i.test(v) ? null : 'must start with https://, http://, mailto:, tel:, / or #',
+  phone: (v) => /\d{7,}/.test(v.replace(/\D/g, '')) ? null : 'must contain at least 7 digits',
+  email: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v) ? null : 'must be an email address',
+  text: (v) => v.length <= 500 ? null : 'must be 500 characters or fewer',
+};
 
 function mount(app, cfg) {
   if (!app || typeof app.use !== 'function') throw new Error('zah-site-mcp: mount(app, cfg) needs an Express app');
@@ -65,6 +80,14 @@ function mount(app, cfg) {
     editable: p.editable || DEFAULT_EDITABLE,
   }));
 
+  const settingsSchema = {};
+  for (const [k, def] of Object.entries(cfg.settings || {})) {
+    if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(k)) throw new Error(`zah-site-mcp: bad setting name "${k}"`);
+    const kind = def.kind || 'text';
+    if (!KINDS[kind]) throw new Error(`zah-site-mcp: setting "${k}" has unknown kind "${kind}"`);
+    settingsSchema[k] = { label: def.label || k, kind, default: def.default === undefined ? '' : String(def.default) };
+  }
+
   /** @type {Site} */
   const site = {
     id: cfg.siteId,
@@ -72,8 +95,26 @@ function mount(app, cfg) {
     publicUrl: cfg.publicUrl,
     store,
     pages,
+    settingsSchema,
     page: (p) => pages.find((x) => x.path === normalise(p)) || null,
     list: (p) => render(readFile(p.file), p, store.read(), p.path).elements,
+    settings: () => {
+      const stored = store.read().settings || {};
+      const out = {};
+      for (const [k, def] of Object.entries(settingsSchema)) out[k] = stored[k] !== undefined ? stored[k] : def.default;
+      return out;
+    },
+    /** Validate and store. Returns {ok} or {error}. */
+    setSetting: (key, value, by) => {
+      const def = settingsSchema[key];
+      if (!def) return { error: `No setting "${key}". Settings: ${Object.keys(settingsSchema).join(', ') || 'none'}` };
+      if (value === null || value === '') { store.setSettings({ [key]: null }, by); return { ok: true, value: def.default, reset: true }; }
+      const v = String(value).trim().slice(0, 2000);
+      const problem = KINDS[def.kind](v);
+      if (problem) return { error: `${key} ${problem}` };
+      store.setSettings({ [key]: v }, by);
+      return { ok: true, value: v };
+    },
   };
 
   // ---------- auth ----------
@@ -133,7 +174,7 @@ function mount(app, cfg) {
   // ---------- REST (what publish.js and any script uses) ----------
   app.get(`${PREFIX}/status`, (_req, res) => {
     const s = store.read();
-    res.json({ site: site.id, mcp: !!token, publish: !!adminHash, version: s.version, updatedAt: s.updatedAt, pages: pages.map((p) => p.path) });
+    res.json({ site: site.id, mcp: !!token, publish: !!adminHash, version: s.version, updatedAt: s.updatedAt, pages: pages.map((p) => p.path), settings: Object.keys(settingsSchema) });
   });
 
   // Zah Editor login → the site token. The editor already gates itself on
@@ -172,6 +213,17 @@ function mount(app, cfg) {
     if (html.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'snapshot too large; embedded images should be uploaded, not pasted' });
     const state = store.setSnapshot(p.path, html, 'editor');
     res.json({ ok: true, version: state.version });
+  });
+
+  app.get(`${PREFIX}/settings`, requireToken, (_req, res) => {
+    res.json({ schema: settingsSchema, values: site.settings() });
+  });
+  app.post(`${PREFIX}/settings`, requireToken, json, (req, res) => {
+    const body = (req.body && req.body.values) || req.body || {};
+    const results = {};
+    for (const [k, v] of Object.entries(body)) results[k] = site.setSetting(k, v, 'rest');
+    const failed = Object.values(results).find((r) => r.error);
+    res.status(failed ? 400 : 200).json({ results, values: site.settings(), version: store.read().version });
   });
 
   app.get(`${PREFIX}/history`, requireToken, (_req, res) => {
