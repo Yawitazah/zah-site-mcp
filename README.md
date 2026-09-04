@@ -12,11 +12,14 @@ The files Zah shipped are the permanent default. Everything the client's AI
 does is an overlay on a Railway volume: new pages, new sections, layout, CSS,
 images, video, embeds and forms. `reset_page` and `reset_site` put the build
 back at any time; every write is versioned and `revert` restores any version.
-Forms and data collection are welcome **when they post to the client's own
-outside service** (Formspree, Google Forms, Airtable, their CRM); this server
-keeps no data for them and a form pointed at the site itself is made inert.
-Storage stops at a quota. Integrating anything into Zah's platform is Zah's
-paid work, by design.
+**Forms go to ZAH CRM by default.** The host declares its lead seam
+(`crm: { leadPath: '/api/lead', enabled }`); when Zah has switched the CRM on,
+a form with that action sends every submission to the client's CRM as a lead.
+When it is not on, the form is kept but inert and the AI is told to ask the
+client "would you like this form connected to ZAH CRM?" and send them to Zah.
+The client's other option is their own outside service (Formspree, Google
+Forms, Airtable) via an https action. This server keeps no form data and
+nothing can be built on it through the MCP. Storage stops at a quota.
 
 ## Install
 
@@ -47,6 +50,7 @@ const site = zahSite.mount(app, {
     phone:      { label: 'Contact phone',           kind: 'phone', default: process.env.CONTACT_PHONE },
   },
   quotaMb: 250, maxFileMb: 30,                       // the client's storage
+  crm: { leadPath: '/api/lead', enabled: () => crm.leadsEnabled() },   // the ZAH CRM door for forms
 });
 // ...then ZAH Pay (reads site.settings()), express.static and the 404 handler.
 ```
@@ -108,6 +112,7 @@ claude.ai custom connectors cannot set headers; use the keyed URL:
 | `list_content(page)` | every heading, paragraph, item, link, button, image, video with a key |
 | `get_content(page, key)` / `get_html(page, key)` | one element; its HTML, or the whole body |
 | `get_styles` | the site's CSS plus custom CSS, so new markup looks native |
+| `forms_info` | is ZAH CRM connected, the action and fields to use, what to tell the client if not |
 
 | Words, links, images | |
 |---|---|
@@ -157,11 +162,13 @@ model, so header and footer edits made by the AI survive an editor save.
 ## What the sanitiser does
 
 Allowed: any HTML, inline styles, `<style>`, external and inline `<script>`
-(embeds, widgets), `<iframe>` from https, `<form>` posting to an https address
-that is not this site. Refused: `javascript:` URLs, `on*` handler attributes,
-`srcdoc`, `object/embed/applet/base/meta`, and a `<form>` with a relative or
-same-origin action, which is kept visible but made inert with a note in
-`data-zs-inert` saying why.
+(embeds, widgets), `<iframe>` from https, `<form>` posting to the ZAH CRM lead
+path (when connected) or to an https address that is not this site. Refused:
+`javascript:` URLs, `on*` handler attributes, `srcdoc`,
+`object/embed/applet/base/meta`. Any other `<form>` is kept visible but made
+inert with a note in `data-zs-inert` saying why. Every structural result lists
+the forms it contained with a `status` (`zah-crm`, `zah-crm-off`, `external`,
+`inert`) and a `note` for the client.
 
 ## Failure modes already met
 

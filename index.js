@@ -18,6 +18,7 @@
        publicUrl: process.env.PUBLIC_URL,
        settings: { bookingUrl: { label, kind: 'url', default }, phone: { ... } },
        quotaMb: 250, maxFileMb: 30,                  // the client's storage
+       crm: { leadPath: '/api/lead', enabled: () => crm.leadsEnabled() },  // the ZAH CRM door for forms
      });
 
    Mount it BEFORE express.static and before any product that reads
@@ -27,10 +28,11 @@
 
    THE MODEL: the files are the permanent default. The client's AI can add
    pages, sections, layout, style, images, video, embeds and forms on top;
-   reset_page and reset_site return to the build. Forms and data collection
-   must go to the client's OWN outside service (this server has no database
-   for them), and storage stops at the quota. Integrating anything into Zah's
-   platform is Zah's paid work, by design.
+   reset_page and reset_site return to the build. Forms go to ZAH CRM by
+   default (the host's lead seam, when Zah has switched it on) or to the
+   client's OWN outside service; this server has no database for them.
+   Storage stops at the quota. Connecting the CRM, or anything else into
+   Zah's platform, is Zah's work, by design.
    ========================================================= */
 const fs = require('fs');
 const path = require('path');
@@ -68,6 +70,9 @@ function mount(app, cfg) {
 
   const ops = new SiteOps({ store, assets, builtPages, opts, settingsSchema });
   try { ops.host = cfg.publicUrl ? new URL(cfg.publicUrl).hostname : ''; } catch (e) { ops.host = ''; }
+  // The ZAH CRM door for forms. The host says where its lead seam is and
+  // whether it is switched on; the sanitiser and the AI's notes follow.
+  ops.crm = Object.assign({ leadPath: '/api/lead', enabled: () => false, contactUrl: 'https://zahbrandsolutions.com/contact', trialUrl: 'https://zahcrm.com' }, cfg.crm || {});
 
   const site = {
     id: cfg.siteId,
@@ -147,7 +152,7 @@ function mount(app, cfg) {
   // ---------- REST ----------
   app.get(`${PREFIX}/status`, (_req, res) => {
     const s = store.read();
-    res.json({ site: site.id, mcp: !!token, publish: !!(adminHash && token), version: s.version, updatedAt: s.updatedAt, pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage() });
+    res.json({ site: site.id, mcp: !!token, publish: !!(adminHash && token), version: s.version, updatedAt: s.updatedAt, pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage(), crmConnected: !!(ops.crm.enabled && ops.crm.enabled()) });
   });
 
   app.post(`${PREFIX}/login`, json, (req, res) => {

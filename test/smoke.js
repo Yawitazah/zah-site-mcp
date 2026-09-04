@@ -11,6 +11,7 @@ const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 
 const TOKEN = 'zs_test_token_123456';
+let crmOn = false;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zah-site-'));
 const fixture = path.join(__dirname, 'fixture.html');
 
@@ -28,6 +29,7 @@ const site = mount(app, {
     phone: { label: 'Phone', kind: 'phone', default: '(555) 000-0000' },
   },
   quotaMb: 1, maxFileMb: 1,
+  crm: { leadPath: '/api/lead', enabled: () => crmOn },
 });
 app.use(express.static(__dirname));
 
@@ -77,7 +79,16 @@ const page = async (base, p = '/') => (await fetch(base + p)).text();
   assert(html.includes('New section') && html.indexOf('New section') < html.indexOf('Item two'), 'inserted after section:0, before the list section');
   assert(html.includes('Changed by MCP') && html.includes('Kept my icon'), 'earlier keyed edits folded into the snapshot');
   assert(html.includes('<script>window.__fixtureChrome'), 'file chrome survives materialisation');
-  assert(html.includes('action="https://formspree.io/f/x"') && html.includes('data-zs-inert'), 'external form kept, same-origin form made inert');
+  assert(html.includes('action="https://formspree.io/f/x"') && html.includes('data-zs-inert="ZAH CRM is not connected'), 'external form kept, CRM form inert with the CRM note while CRM is off');
+  assert(ins.forms.length === 2 && ins.forms[0].status === 'external' && ins.forms[1].status === 'zah-crm-off' && /would you like this form connected to ZAH CRM/.test(ins.forms[1].note), 'insert_html reports each form and the CRM question');
+  const fi = J(await call('forms_info'));
+  assert(fi.defaultDestination === 'ZAH CRM' && fi.zahCrm.connected === false, 'forms_info: CRM default, not connected');
+  crmOn = true;
+  const ins2 = J(await call('insert_html', { page: '/', html: '<form action="/api/lead"><input name="email"></form>', position: 'append', target: 'main:0' }));
+  assert(ins2.forms[0].status === 'zah-crm' && (await page(base)).includes('data-zs-form="zah-crm"') && (await page(base)).includes('method="post"'), 'with CRM on, a /api/lead form is live and posts');
+  assert(J(await call('forms_info')).zahCrm.connected === true, 'forms_info: connected');
+  await call('remove', { page: '/', key: ins2.inserted[0] });
+  crmOn = false;
   assert(html.includes('src="https://widget.test/w.js" data-zs-keep'), 'client embed script kept');
   const newKey = ins.inserted[0];
   const list2 = J(await call('list_content', { page: '/' }));
