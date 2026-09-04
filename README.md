@@ -50,7 +50,7 @@ const site = zahSite.mount(app, {
     phone:      { label: 'Contact phone',           kind: 'phone', default: process.env.CONTACT_PHONE },
   },
   quotaMb: 250, maxFileMb: 30,                       // the client's storage
-  crm: { leadPath: '/api/lead', enabled: () => crm.leadsEnabled() },   // the ZAH CRM door for forms
+  crm: { leadPath: crm.leadPath, enabled: crm.leadsEnabled, notice: '...' },   // the ZAH CRM door for forms; notice = a host rule every form note carries (e.g. no health information)
 });
 // ...then ZAH Pay (reads site.settings()), express.static and the 404 handler.
 ```
