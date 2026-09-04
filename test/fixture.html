@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html><head><title>Fixture</title></head>
+<html><head><title>Fixture</title><style>.check{color:green}</style></head>
 <body>
-<header><h1>Not editable, outside main</h1></header>
+<header><h1>Not editable, outside main</h1><nav><a href="/">Home</a></nav></header>
 <main>
-  <section>
+  <section class="hero">
     <h1>Hello world</h1>
     <p>First paragraph.</p>
     <a class="btn" data-zs="hero.cta" href="https://old.example.com">Book</a>
   </section>
-  <section>
+  <section class="list">
     <ul>
       <li><span class="check">✓</span>Item one</li>
       <li><span class="check">✓</span>Item two</li>
@@ -16,4 +16,7 @@
     <img src="/a.jpg" alt="A">
   </section>
 </main>
+<footer><p>Footer</p></footer>
+<button type="button" id="edToggle">✎</button>
+<script>window.__fixtureChrome = true;</script>
 </body></html>

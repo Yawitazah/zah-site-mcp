@@ -1,10 +1,22 @@
 # ZAH Site MCP
 
-Lets a client's own AI read and change their ZAH-built website through MCP,
-and gives Zah Editor a real **Publish** so edits reach every visitor.
+Lets a client's own AI read and **build on** their ZAH-built website through
+MCP, and gives Zah Editor a real **Publish** so edits reach every visitor.
 
 **Do not rebuild this per site. Install it and mount it.** If the contract
 below does not fit a site, extend it here so every site gets the change.
+
+## The model, in one paragraph
+
+The files Zah shipped are the permanent default. Everything the client's AI
+does is an overlay on a Railway volume: new pages, new sections, layout, CSS,
+images, video, embeds and forms. `reset_page` and `reset_site` put the build
+back at any time; every write is versioned and `revert` restores any version.
+Forms and data collection are welcome **when they post to the client's own
+outside service** (Formspree, Google Forms, Airtable, their CRM); this server
+keeps no data for them and a form pointed at the site itself is made inert.
+Storage stops at a quota. Integrating anything into Zah's platform is Zah's
+paid work, by design.
 
 ## Install
 
@@ -12,13 +24,15 @@ below does not fit a site, extend it here so every site gets the change.
 npm i github:Yawitazah/zah-site-mcp
 ```
 
+Alpine images need git for that: `RUN apk add --no-cache git` in the Dockerfile.
+
 ## Mount (the whole integration)
 
 ```js
 const path = require('path');
 const zahSite = require('zah-site-mcp');
 
-zahSite.mount(app, {
+const site = zahSite.mount(app, {
   siteId: 'new-vision',                              // matches SITE_ID / ZAH Gate
   name: 'New Vision Therapy & Wellness',
   dataDir: process.env.DATA_DIR || '/data',          // a Railway volume
@@ -28,18 +42,26 @@ zahSite.mount(app, {
   pages: [
     { path: '/', file: path.join(__dirname, 'index.html'), root: 'main' },
   ],
+  settings: {                                        // values the client may change
+    bookingUrl: { label: 'Where "Book" buttons go', kind: 'url',   default: process.env.BOOKING_URL },
+    phone:      { label: 'Contact phone',           kind: 'phone', default: process.env.CONTACT_PHONE },
+  },
+  quotaMb: 250, maxFileMb: 30,                       // the client's storage
 });
-// ...then express.static and the 404 handler, AFTER this.
+// ...then ZAH Pay (reads site.settings()), express.static and the 404 handler.
 ```
 
 Rules:
 
-- Mount **before** `express.static`. It serves the listed pages itself.
-- `root` is the selector Zah Editor edits (usually `main`). Only content inside
-  it is reachable.
-- Each page needs a `file` on disk. The file stays the design source of truth;
-  edits are an overlay on top of it, so a redeploy never loses a client's edits
-  and a client's edits never block a redeploy.
+- Mount **before** `express.static` and before any product that reads
+  `site.settings()`. It serves the listed pages and every client-created page.
+- The first page in `pages` is the **template**: client-created pages take its
+  head, CSS, header, footer and chrome.
+- `root` is the selector Zah Editor edits (usually `main`). The MCP edits the
+  whole body: header, nav, main, footer.
+- Each page needs a `file` on disk. Redeploying new source changes a page that
+  has NOT been restructured; a restructured page keeps its snapshot until
+  `reset_page`. Say so in the handoff.
 
 On the page, after `zah-editor.js`:
 
@@ -47,112 +69,112 @@ On the page, after `zah-editor.js`:
 <script src="/zah-site/publish.js"></script>
 ```
 
-That is what makes the editor's **Save** publish to the server. Without it the
-editor still works, but only in the one browser.
-
-## Settings: site-wide values the client can change
-
-Declare what the site reads, the MCP lets the client change it, and every
-product or button that reads it follows. This is how a client changes their
-booking link or phone number without a developer:
-
-```js
-settings: {
-  bookingUrl: { label: 'Where "Book" buttons go', kind: 'url',   default: process.env.BOOKING_URL },
-  phone:      { label: 'Contact phone',           kind: 'phone', default: process.env.CONTACT_PHONE },
-}
-```
-
-Kinds: `url`, `phone`, `email`, `text`. The mount returns the site object;
-read values with `site.settings()`. ZAH Pay takes `booking: () => ...` for
-exactly this. An empty value resets to the default (the env var).
-
 ## What it owns
 
 | Thing | Where |
 |---|---|
-| Routes | `/zah-site/*` (MCP at `/zah-site/mcp`, REST beside it) |
-| Data | `<dataDir>/zah-site/overlay.json` + `history/` (every previous version) |
-| Assets | `/zah-site/publish.js` |
-| Styling | none. It renders no UI. |
+| Routes | `/zah-site/*`: MCP at `/zah-site/mcp`, assets at `/zah-site/assets/<name>`, REST beside them |
+| Pages | the configured ones, plus any path the client created |
+| Data | `<dataDir>/zah-site/overlay.json`, `history/` (last 200 versions), `assets/` |
+| Styling | none of its own. Custom CSS the client adds is injected as `<style id="zs-custom">` |
+| Chrome | `<script>`s and product UI from the file (`#edToggle`, `#edBar`, `.zp-modal`, `[data-zs-chrome]`) are never in a snapshot and never lost |
 
 ## Environment
 
 | Variable | Required | What |
 |---|---|---|
-| `SITE_MCP_TOKEN` | for MCP + publish | The site's own token. Generate: `python -c "import secrets;print('zs_'+secrets.token_hex(24))"`. Revoke by changing it. Never Zah's CRM key, never a Stripe key. |
-| `DATA_DIR` | yes on Railway | Mount a volume at `/data` and set this to `/data`, or edits vanish on redeploy |
+| `SITE_MCP_TOKEN` | for MCP + publish | The site's own token. Generate: `python -c "import secrets;print('zs_'+secrets.token_hex(24))"`. Rotate to revoke. Never Zah's CRM key, never a Stripe key. |
+| `DATA_DIR` | yes on Railway | Mount a volume at `/data` and set this to `/data`, or edits and uploads vanish on redeploy |
 | `EDITOR_ADMIN_HASH` | for publish | `sha256(email.lower():password)`, the same hash the page's `ZAH_EDITOR_CFG` carries |
 
 Without a token: pages serve, everything under `/zah-site/*` refuses (503).
-Without a volume: edits survive until the next deploy. Say so in the handoff.
 
 ## Connect a client's AI
 
-Give the client this, nothing else:
-
-**Claude Desktop / Claude Code** (`claude mcp add`):
-
 ```bash
-claude mcp add --transport http new-vision-site https://YOUR-SITE/zah-site/mcp --header "Authorization: Bearer zs_..."
+claude mcp add --transport http my-site https://YOUR-SITE/zah-site/mcp --header "Authorization: Bearer zs_..."
 ```
 
-**claude.ai custom connector** (cannot set headers), use the keyed URL:
-
-```
-https://YOUR-SITE/zah-site/mcp/k/zs_...
-```
-
-Then: *"List the content on my homepage and change the hero headline to ..."*
+claude.ai custom connectors cannot set headers; use the keyed URL:
+`https://YOUR-SITE/zah-site/mcp/k/zs_...`
 
 ## The tools
 
-| Tool | Does |
+| Read | |
 |---|---|
-| `get_site` | id, pages, how editing works. Call first. |
-| `list_content(page)` | every editable element with a stable key, its text, links, images |
-| `get_content(page, key)` | one element |
-| `set_text(page, key, text)` | change words. Icons and child elements inside are kept |
-| `set_link(page, key, href, target?)` | change where a button or link goes |
-| `set_image(page, key, src, alt?)` | swap an image by URL |
-| `set_hidden(page, key, hidden)` | hide or show, nothing deleted |
-| `set_many(page, edits[])` | a batch, one version |
-| `get_settings()` / `set_setting(key, value)` | site-wide values the host declared (booking link, phone) |
-| `history()` / `revert(version)` | every version is kept; any can be restored |
-| `reset_page(page)` | drop every edit, serve the file as built |
+| `get_site` | id, pages, settings, usage, and how editing works. Call first. |
+| `list_pages` | every page, built or client-created |
+| `get_outline(page)` | header, nav, main, sections, footer, blocks: keys, classes, depth |
+| `list_content(page)` | every heading, paragraph, item, link, button, image, video with a key |
+| `get_content(page, key)` / `get_html(page, key)` | one element; its HTML, or the whole body |
+| `get_styles` | the site's CSS plus custom CSS, so new markup looks native |
 
-Deliberately **not** provided: adding or removing elements, changing styles,
-uploading files. Positional keys stay stable because structure never changes
-through the MCP, and the layout the client paid for cannot be wrecked by a
-prompt. Structure changes are a Zah Editor publish or a source change.
+| Words, links, images | |
+|---|---|
+| `set_text` `set_link` `set_image` `set_hidden` `set_many` | small edits; child elements (icons) kept |
+
+| Structure | |
+|---|---|
+| `insert_html(page, html, position, target)` | a new section, card, image, embed, form |
+| `set_html(page, key, html)` | rewrite an element, or the whole body |
+| `move` `duplicate` `remove` | `<main>`, `<header>`, `<footer>` cannot be removed |
+
+| Pages, style, files | |
+|---|---|
+| `create_page(path, title, description?, from?, html?)` | starts as a copy of `from` (default `/`) so it matches |
+| `set_page_meta` `delete_page` | delete only client-created pages |
+| `set_css` `append_css` | the site-wide custom stylesheet |
+| `add_asset(name, url \| dataBase64)` `list_assets` `delete_asset` `get_usage` | images, video, audio, PDF; per-file cap and site quota |
+
+| Settings and safety | |
+|---|---|
+| `get_settings` `set_setting` | values the host declared (booking link, phone). Empty resets to default |
+| `history` `revert(version)` | every version kept |
+| `reset_page(page)` `reset_site(confirm)` | back to the build; assets and settings survive `reset_site` |
 
 ## Keys
 
-Elements matching `h1 h2 h3 h4 p li blockquote figcaption a.btn a.button img`
-inside the root get keys in document order: `h1:0`, `p:12`, `img:0`. An element
-that already has `data-zs="hero.title"` keeps that name, so name the things
-that matter in the source. Override the list per page with `editable: [...]`.
+Every editable element (`h1 h2 h3 h4 h5 p li blockquote figcaption a button
+img video label`) and structural block (`header nav main section article
+aside footer figure ul ol table`, and `div` with an id or class) inside
+`<body>` gets a `data-zs` key. Untouched pages use positional keys (`h2:3`,
+`section:1`). Once a page has been restructured ("materialised"), keys are
+baked into its markup and new nodes get random keys (`n:3f9a1c`), so later
+insertions never shift anything. An element that already carries
+`data-zs="hero.title"` keeps that name.
 
 ## Order of application
 
-1. Zah Editor snapshot for the page (whole root), if one was published
-2. Keys assigned
-3. MCP edits on top
+1. snapshot (the page as the client restructured it) or the file's body
+2. chrome from the file re-attached
+3. keys
+4. small keyed edits
+5. custom CSS
 
-A new snapshot clears that page's MCP edits: the editor's author has just seen
-the page as they want it. Every state before every write is in history.
+A Zah Editor publish replaces only the editor's root (`main`) inside that
+model, so header and footer edits made by the AI survive an editor save.
+
+## What the sanitiser does
+
+Allowed: any HTML, inline styles, `<style>`, external and inline `<script>`
+(embeds, widgets), `<iframe>` from https, `<form>` posting to an https address
+that is not this site. Refused: `javascript:` URLs, `on*` handler attributes,
+`srcdoc`, `object/embed/applet/base/meta`, and a `<form>` with a relative or
+same-origin action, which is kept visible but made inert with a note in
+`data-zs-inert` saying why.
 
 ## Failure modes already met
 
-- **Editor Save said "Saved here only".** The bridge has no token: the page's
+- **"Saved here only" in the editor.** No token reached the bridge: the page's
   admin hash does not match `EDITOR_ADMIN_HASH`, or `SITE_MCP_TOKEN` is unset.
-- **A client's edit disappeared after a deploy.** No volume. Set `DATA_DIR` to
-  a mounted path.
-- **Keys shifted.** Someone changed the page structure in source. Old edits
-  still apply to whatever now holds the old key; `reset_page` and redo, or
-  name the elements with `data-zs` so keys stop being positional.
-- **claude.ai says it cannot connect.** It cannot send headers; use the
-  `/mcp/k/<token>` URL.
+- **Edits vanished after a deploy.** No volume. Set `DATA_DIR` to a mounted path.
+- **Zah's source change is not showing on a page.** That page is materialised;
+  the client restructured it. `reset_page` shows the new build (their changes
+  go to history and can be reverted, or redone).
+- **claude.ai cannot connect.** It cannot send headers; use `/mcp/k/<token>`.
+- **Video upload fails.** Base64 through MCP is limited to a few MB; give
+  `add_asset` a URL instead (Google Drive direct link, Dropbox `?dl=1`), or
+  embed from YouTube/Vimeo.
 
 ## Test
 
@@ -160,5 +182,6 @@ the page as they want it. Every state before every write is in history.
 npm test
 ```
 
-Mounts a fixture, drives it with a real MCP client, checks the visitor sees
-each change, and that a wrong token cannot connect.
+Fifty checks: keys, keyed edits, structure, pages, CSS, assets and quota,
+forms policy, settings, editor snapshot, chrome survival, history, resets,
+auth.

@@ -70,7 +70,7 @@
     fetch("/zah-site/snapshot", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + t },
-      body: JSON.stringify({ page: page, html: cleanRootHtml() })
+      body: JSON.stringify({ page: page, root: rootSel, html: cleanRootHtml() })
     }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
         if (res.ok) {
