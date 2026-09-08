@@ -19,6 +19,7 @@
        settings: { bookingUrl: { label, kind: 'url', default }, phone: { ... } },
        quotaMb: 250, maxFileMb: 30,                  // the client's storage
        crm: { leadPath: '/api/lead', enabled: () => crm.leadsEnabled() },  // the ZAH CRM door for forms
+       credit: true,                                  // the house link on every page; only Zah sets false
      });
 
    Mount it BEFORE express.static and before any product that reads
@@ -58,7 +59,8 @@ function mount(app, cfg) {
   const express = cfg.express || require('express');
 
   const builtPages = cfg.pages.map((p) => ({ path: normalise(p.path), file: p.file, root: p.root || 'main' }));
-  const opts = { editable: cfg.editable || DEFAULT_EDITABLE, chrome: (cfg.chrome || []).concat(DEFAULT_CHROME) };
+  // credit: the house link on every page, on unless Zah turns it off for a site.
+  const opts = { editable: cfg.editable || DEFAULT_EDITABLE, chrome: (cfg.chrome || []).concat(DEFAULT_CHROME), credit: cfg.credit !== false };
 
   const settingsSchema = {};
   for (const [k, def] of Object.entries(cfg.settings || {})) {

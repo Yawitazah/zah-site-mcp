@@ -127,7 +127,7 @@ claude.ai custom connectors cannot set headers; use the keyed URL:
 | Pages, style, files | |
 |---|---|
 | `create_page(path, title, description?, from?, html?)` | starts as a copy of `from` (default `/`) so it matches |
-| `set_page_meta` `delete_page` | delete only client-created pages |
+| `set_page_meta(page, title?, description?, image?)` `get_page_meta` | SEO for any page: title, description, share image (og:image). `delete_page` only removes client-created pages |
 | `set_css` `append_css` | the site-wide custom stylesheet |
 | `add_asset(name, url \| dataBase64)` `list_assets` `delete_asset` `get_usage` | images, video, audio, PDF; per-file cap and site quota |
 
@@ -192,3 +192,12 @@ npm test
 Fifty checks: keys, keyed edits, structure, pages, CSS, assets and quota,
 forms policy, settings, editor snapshot, chrome survival, history, resets,
 auth.
+
+## The house credit
+
+Every page a site serves carries a link to zahbrandsolutions.com. Mark the
+one in the footer `data-zs-credit` and it is chrome: not keyed, not editable
+by the AI or the editor. If a page ends up with no link to the house at all
+(a client page without a footer, an edit that removed it), `render()` adds a
+small one before `</body>`. `mount({ credit: false })` is the only switch,
+and it is Zah's.
