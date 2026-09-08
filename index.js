@@ -196,6 +196,23 @@ function mount(app, cfg) {
     res.status(result.error ? 400 : 200).json(result);
   }));
 
+  // Page SEO over REST, for the account page's SEO widget (the MCP tools
+  // set_page_meta / get_page_meta are the same operation for the client's AI).
+  app.get(`${PREFIX}/page-meta`, requireToken, (req, res) => withPage(req, res, (p) => {
+    const m = (store.read().pages || {})[p.path] || {};
+    res.json({ page: p.path, title: m.title || '', description: m.description || '', image: m.image || '' });
+  }));
+  app.post(`${PREFIX}/page-meta`, requireToken, json, (req, res) => withPage(req, res, (p) => {
+    const b = req.body || {};
+    const image = b.image === undefined ? undefined : String(b.image).slice(0, 500);
+    if (image && !/^(https:\/\/|\/)/.test(image)) return res.status(400).json({ error: 'image must be an https URL or a path starting with /' });
+    const r = ops.setPageMeta(p, {
+      title: b.title === undefined ? undefined : String(b.title).slice(0, 200),
+      description: b.description === undefined ? undefined : String(b.description).slice(0, 300),
+      image,
+    }, 'rest');
+    res.json(r);
+  }));
   app.get(`${PREFIX}/settings`, requireToken, (_req, res) => res.json({ schema: settingsSchema, values: ops.settings() }));
   app.post(`${PREFIX}/settings`, requireToken, json, (req, res) => {
     const body = (req.body && req.body.values) || req.body || {};

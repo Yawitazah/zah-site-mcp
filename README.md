@@ -127,7 +127,7 @@ claude.ai custom connectors cannot set headers; use the keyed URL:
 | Pages, style, files | |
 |---|---|
 | `create_page(path, title, description?, from?, html?)` | starts as a copy of `from` (default `/`) so it matches |
-| `set_page_meta(page, title?, description?, image?)` `get_page_meta` | SEO for any page: title, description, share image (og:image). `delete_page` only removes client-created pages |
+| `set_page_meta(page, title?, description?, image?)` `get_page_meta` (REST: `GET/POST /zah-site/page-meta?page=`) | SEO for any page: title, description, share image (og:image). `delete_page` only removes client-created pages |
 | `set_css` `append_css` | the site-wide custom stylesheet |
 | `add_asset(name, url \| dataBase64)` `list_assets` `delete_asset` `get_usage` | images, video, audio, PDF; per-file cap and site quota |
 
