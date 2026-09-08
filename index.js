@@ -154,7 +154,18 @@ function mount(app, cfg) {
   // ---------- REST ----------
   app.get(`${PREFIX}/status`, (_req, res) => {
     const s = store.read();
-    res.json({ site: site.id, mcp: !!token, publish: !!(adminHash && token), version: s.version, updatedAt: s.updatedAt, pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage(), crmConnected: !!(ops.crm.enabled && ops.crm.enabled()) });
+    // Who has ever changed this site: the client's AI ('mcp'), the on-page
+    // editor ('publish'), or the account page ('rest'). ZAH Account reads
+    // this to tick "connected your AI" the moment it is true. History files
+    // are small JSON snapshots; the newest fifty are enough to answer.
+    const by = new Set();
+    if (s.updatedBy) by.add(s.updatedBy);
+    try {
+      for (const h of store.history().slice(0, 50)) {
+        try { const j = JSON.parse(fs.readFileSync(path.join(store.historyDir, h.file), 'utf8')); if (j && j.updatedBy) by.add(j.updatedBy); } catch (e) { /* skip */ }
+      }
+    } catch (e) { /* no history yet */ }
+    res.json({ site: site.id, mcp: !!token, publish: !!(adminHash && token), version: s.version, updatedAt: s.updatedAt, updatedBy: s.updatedBy || null, editedBy: [...by], pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage(), crmConnected: !!(ops.crm.enabled && ops.crm.enabled()) });
   });
 
   app.post(`${PREFIX}/login`, json, (req, res) => {

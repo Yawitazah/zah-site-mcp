@@ -1,6 +1,6 @@
 {
   "name": "zah-site-mcp",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "ZAH Site MCP: lets a client's own AI read and change their ZAH-built site through MCP, with edits published server-side for every visitor.",
   "main": "index.js",
   "type": "commonjs",
