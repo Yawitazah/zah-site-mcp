@@ -43,6 +43,7 @@ const { Assets } = require('./lib/assets');
 const { SiteOps, KINDS, normalise } = require('./lib/ops');
 const { DEFAULT_EDITABLE, DEFAULT_CHROME, sanitize } = require('./lib/render');
 const { handleMcp } = require('./lib/mcp');
+const { verifyAccount, accountLinks, DEFAULT_URL } = require('./lib/account');
 
 const PREFIX = '/zah-site';
 
@@ -56,6 +57,12 @@ function mount(app, cfg) {
   const assets = new Assets(store, { maxFileMb: cfg.maxFileMb, quotaMb: cfg.quotaMb });
   const token = String(cfg.token || '');
   const adminHash = String(cfg.adminHash || '');
+  // THE ONE LOGIN. The client's ZAH Account (zahbrandsolutions.com/account)
+  // signs in to their own editor and Publish here, so the site never asks
+  // them to remember a second password. adminHash stays as the offline way
+  // in: Zah's, and the one that still works if head office is unreachable.
+  const accountUrl = String(cfg.accountUrl || process.env.ACCOUNT_URL || DEFAULT_URL).replace(/\/+$/, '');
+  const accountLogin = cfg.accountLogin !== false;
   const express = cfg.express || require('express');
 
   const builtPages = cfg.pages.map((p) => ({ path: normalise(p.path), file: p.file, root: p.root || 'main' }));
@@ -165,16 +172,41 @@ function mount(app, cfg) {
         try { const j = JSON.parse(fs.readFileSync(path.join(store.historyDir, h.file), 'utf8')); if (j && j.updatedBy) by.add(j.updatedBy); } catch (e) { /* skip */ }
       }
     } catch (e) { /* no history yet */ }
-    res.json({ site: site.id, mcp: !!token, publish: !!(adminHash && token), version: s.version, updatedAt: s.updatedAt, updatedBy: s.updatedBy || null, editedBy: [...by], pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage(), crmConnected: !!(ops.crm.enabled && ops.crm.enabled()) });
+    res.json({ site: site.id, mcp: !!token, publish: !!((adminHash || accountLogin) && token), account: accountLogin ? accountUrl : null, version: s.version, updatedAt: s.updatedAt, updatedBy: s.updatedBy || null, editedBy: [...by], pages: ops.listPages().map((p) => p.path), settings: Object.keys(settingsSchema), usage: assets.usage(), crmConnected: !!(ops.crm.enabled && ops.crm.enabled()) });
   });
 
-  app.post(`${PREFIX}/login`, json, (req, res) => {
-    if (!adminHash || !token) return res.status(503).json({ error: 'Publishing is not switched on for this site.' });
+  // Zah Editor's pencil and Publish. Two ways in, one of them the client's:
+  //   1. their ZAH Account, which is the login they already have; ZAH Account
+  //      also confirms the account pays for THIS site
+  //   2. this site's own adminHash, Zah's spare key, which needs no network
+  // Slow the guessing down either way: five wrong answers a minute per address.
+  const attempts = new Map();
+  const WRONG_LIMIT = Number(cfg.loginTries || 5);
+  const locked = (ip) => { const a = attempts.get(ip); return !!a && Date.now() < a.until && a.n >= WRONG_LIMIT; };
+  const wrong = (ip) => {
+    const now = Date.now();
+    const a = attempts.get(ip);
+    if (!a || now > a.until) { attempts.set(ip, { n: 1, until: now + 60000 }); if (attempts.size > 2000) for (const [k, v] of attempts) if (now > v.until) attempts.delete(k); return; }
+    a.n += 1;
+  };
+
+  app.post(`${PREFIX}/login`, json, async (req, res) => {
+    if (!token || (!adminHash && !accountLogin)) return res.status(503).json({ error: 'Publishing is not switched on for this site.' });
     const email = String((req.body && req.body.email) || '').trim().toLowerCase();
     const password = String((req.body && req.body.password) || '');
-    const h = crypto.createHash('sha256').update(`${email}:${password}`).digest('hex');
-    if (h !== adminHash) return res.status(401).json({ error: 'Login failed.' });
-    res.json({ token });
+    const ip = req.ip || 'unknown';
+    if (!email || !password) return res.status(401).json({ error: 'Login failed.' });
+    if (locked(ip)) return res.status(429).json({ error: 'Too many tries. Wait a minute, then try again.' });
+
+    if (adminHash && crypto.createHash('sha256').update(`${email}:${password}`).digest('hex') === adminHash) {
+      return res.json({ token, who: email, via: 'site' });
+    }
+    if (accountLogin) {
+      const who = await verifyAccount({ accountUrl, siteId: site.id, email, password });
+      if (who) return res.json({ token, who: who.name || who.email, via: 'account' });
+    }
+    wrong(ip);   // only a wrong answer counts, so working here is never punished
+    res.status(401).json({ error: accountLogin ? 'That email and password do not match your ZAH Account for this site.' : 'Login failed.' });
   });
 
   const withPage = (req, res, fn) => {
@@ -239,12 +271,46 @@ function mount(app, cfg) {
   app.post(`${PREFIX}/reset-site`, requireToken, json, (_req, res) => res.json(ops.resetSite('rest')));
   app.get(`${PREFIX}/usage`, requireToken, (_req, res) => res.json(assets.usage()));
 
+  // ---------- the back office, on the client's own domain ----------
+  // A client looks for their own things on their own site, not on ours. These
+  // five short paths are the doors, and every one of them lands on the ONE
+  // login: /edit opens the pencil here, the rest hand off to ZAH Account,
+  // which mints the ZAH CRM session without a second password.
+  const doors = cfg.backOffice === false ? null : Object.assign(
+    { account: '/account', login: '/login', edit: '/edit', crm: '/crm', dispatch: '/dispatch' },
+    typeof cfg.backOffice === 'object' ? cfg.backOffice : {}
+  );
+  if (doors) {
+    const links = accountLinks(accountUrl);
+    const home = builtPages[0] ? builtPages[0].path : '/';
+    const door = (where, to) => {
+      const at = normalise(where);
+      // Never shadow a real page of the site, built or client-created.
+      if (ops.isBuilt(at) || (ops.page(at) && ops.page(at).custom)) return null;
+      app.get(at, (_req, res) => {
+        res.setHeader('X-Robots-Tag', 'noindex');
+        res.setHeader('Cache-Control', 'no-store');
+        res.redirect(302, typeof to === 'function' ? to() : to);
+      });
+      return at;
+    };
+    const opened = [
+      doors.account && door(doors.account, links.account),
+      doors.login && door(doors.login, links.account),
+      // The editor is on the page itself; ?edit=1 opens its login on arrival.
+      doors.edit && door(doors.edit, `${home}${home.includes('?') ? '&' : '?'}edit=1`),
+      doors.crm && door(doors.crm, links.crm),
+      doors.dispatch && door(doors.dispatch, links.dispatch),
+    ].filter(Boolean);
+    if (opened.length) console.log(`[zah-site] back office: ${opened.join(' ')} -> ZAH Account`);
+  }
+
   app.get(`${PREFIX}/publish.js`, (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.type('application/javascript').sendFile(path.join(__dirname, 'public', 'publish.js'));
   });
 
-  console.log(`[zah-site] ${site.id}: mcp ${token ? 'ON' : 'off (no token)'}, publish ${adminHash && token ? 'ON' : 'off'}, data ${store.dir}, quota ${assets.quota / 1048576}MB, pages ${builtPages.map((p) => p.path).join(' ')}`);
+  console.log(`[zah-site] ${site.id}: mcp ${token ? 'ON' : 'off (no token)'}, publish ${(adminHash || accountLogin) && token ? `ON (${[accountLogin && 'ZAH Account', adminHash && 'site password'].filter(Boolean).join(' + ')})` : 'off'}, data ${store.dir}, quota ${assets.quota / 1048576}MB, pages ${builtPages.map((p) => p.path).join(' ')}`);
   return site;
 }
 

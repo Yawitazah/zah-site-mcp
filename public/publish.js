@@ -6,17 +6,19 @@
    existed, Save wrote to localStorage and the client's own browser was the
    only place the change lived.
 
-   How it works, with no changes to the editor engine:
-     - the editor logs in with email + password against a hash; this bridge
-       sends the same pair to /zah-site/login and keeps the site token in
-       sessionStorage for the tab
+   How it works:
+     - the editor signs in against /zah-site/login, which accepts the
+       client's ZAH Account (the one login) or the site's own key, and
+       announces the result as a "zah-editor:login" event; this bridge takes
+       the site token from it and keeps it in sessionStorage for the tab
+     - older editor builds do not fire that event, so their two prompts are
+       still wrapped and the same pair is posted to /zah-site/login here
      - a click on #edSave also posts a cleaned copy of the root's innerHTML
        to /zah-site/snapshot
      - a click on #edReset also clears the server copy, and the page reloads
        to the file as built
 
-   The editor's own login prompts are wrapped, not replaced, so the flow the
-   client knows (pencil, email, password) is unchanged.
+   Nothing about the flow the client knows changes: pencil, email, password.
    ========================================================= */
 (function () {
   "use strict";
@@ -29,16 +31,27 @@
   function tokenGet() { try { return sessionStorage.getItem(keyName) || ""; } catch (e) { return ""; } }
   function tokenSet(t) { try { sessionStorage.setItem(keyName, t); } catch (e) {} }
 
-  // Wrap window.prompt for the editor's login so the same answers reach the
-  // server. The editor asks "Admin email" then "Admin password".
+  // The editor announces every successful login and hands over whatever the
+  // server said. When that server was this one, the token is already there
+  // and no second request is needed.
+  document.addEventListener("zah-editor:login", function (e) {
+    var d = (e && e.detail) || {};
+    if (d.data && d.data.token) { tokenSet(d.data.token); note("Publishing on"); return; }
+    if (d.email && d.password) login(d.email, d.password);
+  });
+
+  // Older editor builds (before the event) ask two questions and check the
+  // answers themselves. Wrap the prompt so the same pair still reaches the
+  // server. Harmless with a current editor: it logs in before this fires.
   var origPrompt = window.prompt;
   var pending = {};
   window.prompt = function (msg, def) {
     var v = origPrompt.call(window, msg, def);
-    if (/admin email/i.test(msg || "")) pending.email = v;
-    if (/admin password/i.test(msg || "")) {
+    var m = String(msg || "");
+    if (/email/i.test(m)) pending.email = v;
+    if (/password/i.test(m)) {
       pending.password = v;
-      if (pending.email && v) login(pending.email, v);
+      if (pending.email && v && !tokenGet()) login(pending.email, v);
     }
     return v;
   };

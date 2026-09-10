@@ -40,7 +40,8 @@ const site = zahSite.mount(app, {
   name: 'New Vision Therapy & Wellness',
   dataDir: process.env.DATA_DIR || '/data',          // a Railway volume
   token: process.env.SITE_MCP_TOKEN,                 // the client's AI presents this
-  adminHash: process.env.EDITOR_ADMIN_HASH,          // Zah Editor's sha256(email:password)
+  adminHash: process.env.EDITOR_ADMIN_HASH,          // the SPARE key: sha256(email:password)
+  accountUrl: process.env.ACCOUNT_URL,               // ZAH Account; the client's own login (default zahbrandsolutions.com)
   publicUrl: process.env.PUBLIC_URL,
   pages: [
     { path: '/', file: path.join(__dirname, 'index.html'), root: 'main' },
@@ -73,6 +74,43 @@ On the page, after `zah-editor.js`:
 <script src="/zah-site/publish.js"></script>
 ```
 
+## The one login (0.5.0)
+
+The client already has a login: the email and password they made at
+**zahbrandsolutions.com/account**, the one that opens their billing, their
+desk and their Dispatch board. It now opens the pencil on their own site too.
+Zah, 2026-09-10: *"If they are paying for it they should have access without
+having to create multiple logins."*
+
+`POST /zah-site/login { email, password }` takes two kinds of answer:
+
+| | |
+|---|---|
+| **Their ZAH Account** | asked server to server at `POST <accountUrl>/api/account/site-login { siteId, email, password }`. ZAH Account checks the password **and** that this account's live plans include **this `siteId`**, so nobody signs in to a site they do not pay for. |
+| **`adminHash`** | the spare key. Needs no network, so a bad day at head office never locks a client out of their own page. Zah's way in. |
+
+Either way the answer is `{ token, who, via }` and the token is the site's own
+`SITE_MCP_TOKEN`. Five wrong answers a minute from one address earns a 429;
+right answers never count. Set `accountLogin: false` to switch the account
+route off for a site.
+
+## The back office, on the client's own domain
+
+A client looks for their things on **their** site, not on ours. Five short
+paths are opened unless a real page already lives there, each `noindex`,
+each landing on the one login:
+
+| Path | Goes to |
+|---|---|
+| `/account`, `/login` | `zahbrandsolutions.com/account` |
+| `/edit` | this site's first page with `?edit=1`, which opens the editor's login |
+| `/dispatch` | ZAH Account's signed hand-off to their **Dispatch board**, no second password |
+| `/crm` | the same hand-off to **ZAH CRM** |
+
+`backOffice: false` turns them all off; `backOffice: { crm: false }` drops
+one; `backOffice: { dispatch: '/board' }` moves one. A site that serves its
+own page at one of these paths silently keeps it.
+
 ## What it owns
 
 | Thing | Where |
@@ -89,9 +127,11 @@ On the page, after `zah-editor.js`:
 |---|---|---|
 | `SITE_MCP_TOKEN` | for MCP + publish | The site's own token. Generate: `python -c "import secrets;print('zs_'+secrets.token_hex(24))"`. Rotate to revoke. Never Zah's CRM key, never a Stripe key. |
 | `DATA_DIR` | yes on Railway | Mount a volume at `/data` and set this to `/data`, or edits and uploads vanish on redeploy |
-| `EDITOR_ADMIN_HASH` | for publish | `sha256(email.lower():password)`, the same hash the page's `ZAH_EDITOR_CFG` carries |
+| `EDITOR_ADMIN_HASH` | no | The spare key: `sha256(email.lower():password)`, the same hash the page's `ZAH_EDITOR_CFG` carries. The client's ZAH Account works without it. |
+| `ACCOUNT_URL` | no | Where ZAH Account lives. Defaults to `https://www.zahbrandsolutions.com`; set it only to point a site at a rehearsal. |
 
-Without a token: pages serve, everything under `/zah-site/*` refuses (503).
+Without a token: pages serve, everything under `/zah-site/*` refuses (503),
+and the editor falls back to `adminHash` and localStorage.
 
 ## Connect a client's AI
 
