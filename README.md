@@ -103,7 +103,7 @@ each landing on the one login:
 | Path | Goes to |
 |---|---|
 | `/account`, `/login` | `zahbrandsolutions.com/account` |
-| `/edit` | this site's first page with `?edit=1`, which opens the editor's login |
+| `/edit` | `/?edit=1`, which opens the editor's login on arrival |
 | `/dispatch` | ZAH Account's signed hand-off to their **Dispatch board**, no second password |
 | `/crm` | the same hand-off to **ZAH CRM** |
 

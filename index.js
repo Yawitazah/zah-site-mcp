@@ -282,7 +282,6 @@ function mount(app, cfg) {
   );
   if (doors) {
     const links = accountLinks(accountUrl);
-    const home = builtPages[0] ? builtPages[0].path : '/';
     const door = (where, to) => {
       const at = normalise(where);
       // Never shadow a real page of the site, built or client-created.
@@ -298,7 +297,9 @@ function mount(app, cfg) {
       doors.account && door(doors.account, links.account),
       doors.login && door(doors.login, links.account),
       // The editor is on the page itself; ?edit=1 opens its login on arrival.
-      doors.edit && door(doors.edit, `${home}${home.includes('?') ? '&' : '?'}edit=1`),
+      // The site's own home, not builtPages[0]: a site that picks between
+      // designs rewrites / to the chosen one, and that is the one to edit.
+      doors.edit && door(doors.edit, '/?edit=1'),
       doors.crm && door(doors.crm, links.crm),
       doors.dispatch && door(doors.dispatch, links.dispatch),
     ].filter(Boolean);
