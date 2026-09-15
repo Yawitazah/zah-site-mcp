@@ -6,6 +6,11 @@ const express = require('express');
 const { mount } = require('..');
 const R = require('../lib/render');
 
+const compatibility = R.render('<body><p><a href="/nested">Nested</a></p><a href="/outer">Outer</a></body>', {}, { snapshots: {}, edits: { '/': { 'a:0': { text: 'Existing client edit' } } } }, '/');
+assert.equal(compatibility.$('a[href="/outer"]').text(), 'Existing client edit');
+assert.equal(compatibility.$('a[href="/nested"]').text(), 'Nested');
+console.log('ok  newly editable nested content does not renumber existing overlay keys');
+
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zah-editor-persist-'));
   const file = path.join(dir, 'index.html');
