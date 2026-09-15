@@ -289,3 +289,8 @@ Authenticated maintenance endpoints:
 MCP is standard Streamable HTTP. Any compatible AI client can use the endpoint
 with a Bearer token; a keyed URL supports clients without custom headers.
 Keep these URLs/tokens out of shared reports and source control.
+
+Hosts with scroll animations can declare `ZAH_EDITOR_CFG.transientClasses`
+and `transientStyles` arrays (for example `in`, `stuck`, and `--sd`). These
+are stripped from the comparison baseline and published markup, so scrolling
+does not turn a text edit into a structural snapshot.

@@ -23,6 +23,12 @@
     clone.querySelectorAll('script:not([data-zs-keep]), noscript:not([data-zs-keep]), #edToggle, #edBar, #edBubble, #edEl, [data-zs-chrome]').forEach(function (e) { e.remove(); });
     clone.querySelectorAll("[contenteditable], [data-ed]").forEach(function (e) { e.removeAttribute("contenteditable"); e.removeAttribute("data-ed"); });
     clone.querySelectorAll(".ed-sel, .ed-hov").forEach(function (e) { e.classList.remove("ed-sel", "ed-hov"); });
+    // Hosts may declare animation/scroll state that is not editable content.
+    clone.querySelectorAll("[class], [style]").forEach(function (e) {
+      (CFG.transientClasses || []).forEach(function (name) { e.classList.remove(name); });
+      (CFG.transientStyles || []).forEach(function (name) { e.style.removeProperty(name); });
+      if (e.hasAttribute("style") && !e.getAttribute("style").trim()) e.removeAttribute("style");
+    });
     return clone.innerHTML;
   }
   document.addEventListener("zah-editor:before-edit", function () { if (baseHtml === null) baseHtml = cleanRootHtml(); });
