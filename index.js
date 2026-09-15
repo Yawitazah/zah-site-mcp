@@ -38,6 +38,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { editorPatch } = require('./lib/editor');
 const { Store } = require('./lib/store');
 const { Assets } = require('./lib/assets');
 const { SiteOps, KINDS, normalise } = require('./lib/ops');
@@ -120,7 +121,9 @@ function mount(app, cfg) {
       const cacheKey = `${p.path}|${stat.mtimeMs}:${state.version}`;
       let html = cache.get(cacheKey);
       if (!html) {
-        html = ops.render(p).html;
+        const rendered = ops.render(p);
+        rendered.$('head').append('<meta name="zah-site-version" content="' + state.version + '"><meta name="zah-site-source" content="' + crypto.createHash('sha256').update(ops.readFile(p)).digest('hex') + '">');
+        html = rendered.$.html();
         if (cache.size > 50) cache.clear();
         cache.set(cacheKey, html);
       }
@@ -230,13 +233,86 @@ function mount(app, cfg) {
     if (!html.trim()) return res.status(400).json({ error: 'html required' });
     if (html.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'snapshot too large; embedded images should be uploaded, not pasted' });
     const rootSel = String((req.body && req.body.root) || p.root);
+    const b = req.body || {};
+    const sourceHash = crypto.createHash('sha256').update(ops.readFile(p)).digest('hex');
+    if ((b.baseVersion !== undefined && b.baseVersion !== store.read().version) ||
+        (b.sourceHash && b.sourceHash !== sourceHash)) {
+      return res.status(409).json({ error: 'This page changed since you opened it. Your edits have not been published. Copy your changes, reload, then apply them to the latest page.' });
+    }
+    if (typeof b.baseHtml === 'string') {
+      if (b.baseHtml.length > 1.5 * 1024 * 1024) return res.status(413).json({ error: 'base snapshot too large' });
+      const patch = editorPatch(b.baseHtml, html, ops.ctx());
+      if (patch) {
+        const known = new Set([...ops.render(p).elements, ...ops.render(p).outline].map(e => e.key));
+        if (Object.keys(patch).some(k => !known.has(k))) return res.status(409).json({ error: 'The page structure changed. Reload before publishing.' });
+        const R = require('./lib/render');
+        const before = R.load('<body>' + b.baseHtml + '</body>');
+        const after = R.load('<body>' + html + '</body>');
+        const settings = {};
+        after('[data-zs-setting]').each((_, el) => {
+          const node = after(el), key = node.attr('data-zs-setting'), id = node.attr('data-zs');
+          if (!id || !settingsSchema[key]) return;
+          const old = before('[data-zs="' + R.cssEscape(id) + '"]');
+          let value;
+          if (node.attr('data-zs-setting-text') !== undefined && old.text() !== node.text()) value = node.text().trim().slice((node.attr('data-zs-setting-prefix') || '').length);
+          else if (node.attr('data-zs-setting-href') && old.attr('href') !== node.attr('href')) value = String(node.attr('href') || '').replace(/^[a-z]+:/i, '');
+          if (value !== undefined) settings[key] = value;
+        });
+        for (const [key, value] of Object.entries(settings)) {
+          const problem = KINDS[settingsSchema[key].kind](value);
+          if (problem) return res.status(400).json({ error: key + ' ' + problem });
+        }
+        const state = Object.keys(patch).length || Object.keys(settings).length ? store.applyEdits(p.path, patch, 'editor', settings) : store.read();
+        return res.json({ ok: true, version: state.version, mode: 'patch', changed: Object.keys(patch) });
+      }
+    }
     const result = ops.withDom(p, ($) => {
-      const $root = $('body').find(rootSel).first();
+      const $root = rootSel === 'body' ? $('body') : $('body').find(rootSel).first();
       if (!$root.length) return { error: `no ${rootSel} on ${p.path}` };
-      $root.html(sanitize(html, { host: ops.host }));
+      $root.html(sanitize(html, ops.ctx()));
       return { published: rootSel };
     }, 'editor');
     res.status(result.error ? 400 : 200).json(result);
+  }));
+
+  // Maintenance: export first, then explicitly replace an old full snapshot
+  // with reviewed edits on the current build. One versioned write; never reset
+  // a client's content as a side effect of deploying source.
+  app.get(`${PREFIX}/export`, requireToken, (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (req.query.version !== undefined && Number(req.query.version) !== store.read().version) {
+      const entry = store.history().find(h => h.version === Number(req.query.version));
+      if (!entry) return res.status(404).json({ error: 'No such saved version' });
+      return res.json(JSON.parse(fs.readFileSync(path.join(store.historyDir, entry.file), 'utf8')));
+    }
+    res.json(store.read());
+  });
+  app.post(`${PREFIX}/rebase`, requireToken, json, (req, res) => withPage(req, res, (p) => {
+    const b = req.body || {}, current = store.read();
+    if (b.confirm !== 'replace-snapshot-with-reviewed-edits' || !b.edits || typeof b.edits !== 'object' || Array.isArray(b.edits)) return res.status(400).json({ error: 'Reviewed edits and explicit rebase confirmation required.' });
+    const sourceHash = crypto.createHash('sha256').update(ops.readFile(p)).digest('hex');
+    if (b.baseVersion !== current.version || b.sourceHash !== sourceHash) return res.status(409).json({ error: 'The page or source changed. Review a fresh export before rebasing.' });
+    const R = require('./lib/render');
+    const built = R.render(ops.readFile(p), opts, { snapshots: {}, edits: {} }, p.path);
+    const known = new Set([...built.elements, ...built.outline].map(el => el.key));
+    const edits = {};
+    for (const [key, edit] of Object.entries(b.edits)) {
+      if (!known.has(key) || !edit || typeof edit !== 'object') return res.status(400).json({ error: 'Unknown or invalid edit: ' + key });
+      const clean = {};
+      if (edit.text !== undefined) clean.text = String(edit.text);
+      if (edit.html !== undefined) clean.html = R.sanitize(String(edit.html), ops.ctx());
+      if (edit.hidden !== undefined) clean.hidden = !!edit.hidden;
+      if (edit.attrs) {
+        const node = built.$('[data-zs="' + R.cssEscape(key) + '"]').clone();
+        node.attr(edit.attrs);
+        const safe = R.load(R.sanitize(built.$.html(node), ops.ctx()))('[data-zs]').first();
+        clean.attrs = {};
+        for (const attr of R.ATTR_WHITELIST) if (attr in edit.attrs) clean.attrs[attr] = safe.attr(attr) || null;
+      }
+      edits[key] = clean;
+    }
+    const state = store.update(next => { delete next.snapshots[p.path]; next.edits[p.path] = edits; }, 'rebase');
+    res.json({ ok: true, version: state.version, changed: Object.keys(edits) });
   }));
 
   // Page SEO over REST, for the account page's SEO widget (the MCP tools
@@ -267,7 +343,10 @@ function mount(app, cfg) {
 
   app.get(`${PREFIX}/history`, requireToken, (_req, res) => { const cur = store.read(); res.json({ current: { version: cur.version, updatedAt: cur.updatedAt, updatedBy: cur.updatedBy }, previous: store.history() }); });
   app.post(`${PREFIX}/revert`, requireToken, json, (req, res) => { try { res.json({ ok: true, version: store.revert(Number(req.body && req.body.version), 'revert').version }); } catch (e) { res.status(400).json({ error: e.message }); } });
-  app.post(`${PREFIX}/reset`, requireToken, json, (req, res) => withPage(req, res, (p) => res.json(ops.resetPage(p, 'rest'))));
+  app.post(`${PREFIX}/reset`, requireToken, json, (req, res) => withPage(req, res, (p) => {
+    if (req.body.baseVersion !== undefined && req.body.baseVersion !== store.read().version) return res.status(409).json({ error: 'The page changed. Reload before resetting.' });
+    res.json(ops.resetPage(p, 'rest'));
+  }));
   app.post(`${PREFIX}/reset-site`, requireToken, json, (_req, res) => res.json(ops.resetSite('rest')));
   app.get(`${PREFIX}/usage`, requireToken, (_req, res) => res.json(assets.usage()));
 

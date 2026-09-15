@@ -1,25 +1,4 @@
-/* =========================================================
-   ZAH SITE MCP, Zah Editor bridge
-
-   Loaded AFTER zah-editor.js. Turns the editor's Save into a real publish:
-   the edited root goes to the server and every visitor sees it. Until this
-   existed, Save wrote to localStorage and the client's own browser was the
-   only place the change lived.
-
-   How it works:
-     - the editor signs in against /zah-site/login, which accepts the
-       client's ZAH Account (the one login) or the site's own key, and
-       announces the result as a "zah-editor:login" event; this bridge takes
-       the site token from it and keeps it in sessionStorage for the tab
-     - older editor builds do not fire that event, so their two prompts are
-       still wrapped and the same pair is posted to /zah-site/login here
-     - a click on #edSave also posts a cleaned copy of the root's innerHTML
-       to /zah-site/snapshot
-     - a click on #edReset also clears the server copy, and the page reloads
-       to the file as built
-
-   Nothing about the flow the client knows changes: pencil, email, password.
-   ========================================================= */
+/* ZAH Editor publishing: server-confirmed saves, revision checks and keyed patches. */
 (function () {
   "use strict";
   var CFG = window.ZAH_EDITOR_CFG || {};
@@ -27,89 +6,70 @@
   var keyName = (CFG.storageKey || "zah-page") + ":site-token";
   var page = location.pathname.replace(/\/$/, "") || "/";
   var status = document.getElementById("edStatus");
-
+  var save = document.getElementById("edSave");
+  var versionMeta = document.querySelector('meta[name="zah-site-version"]');
+  var sourceMeta = document.querySelector('meta[name="zah-site-source"]');
+  var version = versionMeta ? Number(versionMeta.content) : undefined;
+  var sourceHash = sourceMeta ? sourceMeta.content : undefined;
+  var busy = false, baseHtml = null;
+  window.ZAH_SITE_PUBLISH = true;
   function tokenGet() { try { return sessionStorage.getItem(keyName) || ""; } catch (e) { return ""; } }
   function tokenSet(t) { try { sessionStorage.setItem(keyName, t); } catch (e) {} }
-
-  // The editor announces every successful login and hands over whatever the
-  // server said. When that server was this one, the token is already there
-  // and no second request is needed.
-  document.addEventListener("zah-editor:login", function (e) {
-    var d = (e && e.detail) || {};
-    if (d.data && d.data.token) { tokenSet(d.data.token); note("Publishing on"); return; }
-    if (d.email && d.password) login(d.email, d.password);
-  });
-
-  // Older editor builds (before the event) ask two questions and check the
-  // answers themselves. Wrap the prompt so the same pair still reaches the
-  // server. Harmless with a current editor: it logs in before this fires.
-  var origPrompt = window.prompt;
-  var pending = {};
-  window.prompt = function (msg, def) {
-    var v = origPrompt.call(window, msg, def);
-    var m = String(msg || "");
-    if (/email/i.test(m)) pending.email = v;
-    if (/password/i.test(m)) {
-      pending.password = v;
-      if (pending.email && v && !tokenGet()) login(pending.email, v);
-    }
-    return v;
-  };
-
-  function login(email, password) {
-    fetch("/zah-site/login", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email, password: password })
-    }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d && d.token) { tokenSet(d.token); note("Publishing on"); }
-    }).catch(function () {});
-  }
-
-  function note(t) { if (status) { var was = status.textContent; status.textContent = t; setTimeout(function () { if (status.textContent === t) status.textContent = was; }, 2200); } }
-
+  function note(t) { if (status) { status.textContent = t; status.setAttribute("role", "status"); } }
   function cleanRootHtml() {
     var root = document.querySelector(rootSel);
     if (!root) return "";
     var clone = root.cloneNode(true);
-    clone.querySelectorAll("[contenteditable]").forEach(function (e) { e.removeAttribute("contenteditable"); });
-    clone.querySelectorAll("[data-ed]").forEach(function (e) { e.removeAttribute("data-ed"); });
+    clone.querySelectorAll('script:not([data-zs-keep]), noscript:not([data-zs-keep]), #edToggle, #edBar, #edBubble, #edEl, [data-zs-chrome]').forEach(function (e) { e.remove(); });
+    clone.querySelectorAll("[contenteditable], [data-ed]").forEach(function (e) { e.removeAttribute("contenteditable"); e.removeAttribute("data-ed"); });
     clone.querySelectorAll(".ed-sel, .ed-hov").forEach(function (e) { e.classList.remove("ed-sel", "ed-hov"); });
     return clone.innerHTML;
   }
-
-  function publish() {
+  document.addEventListener("zah-editor:before-edit", function () { if (baseHtml === null) baseHtml = cleanRootHtml(); });
+  document.addEventListener("zah-editor:login", function (e) {
+    var d = e.detail || {};
+    if (d.data && d.data.token) { tokenSet(d.data.token); note("Publishing on"); }
+    else note("Not connected — changes cannot publish");
+  });
+  async function post(path, body) {
     var t = tokenGet();
-    if (!t) { note("Saved here only"); return; }
-    fetch("/zah-site/snapshot", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + t },
-      body: JSON.stringify({ page: page, root: rootSel, html: cleanRootHtml() })
-    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-      .then(function (res) {
-        if (res.ok) {
-          note("Published v" + res.d.version);
-          // The server copy is now the truth; the local copy would shadow
-          // the next MCP edit on this browser, so drop it.
-          try { localStorage.removeItem(CFG.storageKey); } catch (e) {}
-        } else note((res.d && res.d.error) || "Publish failed");
-      })
-      .catch(function () { note("Publish failed"); });
+    if (!t) throw new Error("Not published. Sign in again to connect publishing.");
+    var r = await fetch("/zah-site/" + path, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + t }, body: JSON.stringify(body) });
+    var d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Publish failed. Try again.");
+    return d;
   }
-
-  function reset() {
-    var t = tokenGet();
-    if (!t) return;
-    fetch("/zah-site/reset", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: "Bearer " + t },
-      body: JSON.stringify({ page: page })
-    }).catch(function () {});
+  async function publish() {
+    if (busy) return;
+    busy = true; if (save) save.disabled = true;
+    var html = cleanRootHtml();
+    note("Publishing…");
+    try {
+      var d = await post("snapshot", { page: page, root: rootSel, html: html, baseHtml: baseHtml === null ? undefined : baseHtml, baseVersion: version, sourceHash: sourceHash });
+      version = d.version; baseHtml = html;
+      try { localStorage.removeItem(CFG.storageKey); } catch (e) {}
+      document.dispatchEvent(new CustomEvent("zah-editor:published"));
+      note("Published v" + d.version);
+    } catch (e) { note(e.message || "Not published. Check your connection and try again."); }
+    finally { busy = false; if (save) save.disabled = false; }
   }
-
-  var save = document.getElementById("edSave");
-  var rst = document.getElementById("edReset");
-  if (save) save.addEventListener("click", function () { setTimeout(publish, 0); });
-  // The editor's Reset confirms, then reloads. Capture phase runs before its
-  // handler; the request is fire-and-forget and the reload follows.
-  if (rst) rst.addEventListener("click", function () { reset(); }, true);
+  async function reset() {
+    if (busy) return;
+    busy = true;
+    try {
+      await post("reset", { page: page, baseVersion: version });
+      try { localStorage.removeItem(CFG.storageKey); } catch (e) {}
+      location.reload();
+    } catch (e) { note(e.message || "Reset failed. The page has not been reloaded."); }
+    finally { busy = false; }
+  }
+  document.addEventListener("zah-editor:save", publish);
+  document.addEventListener("zah-editor:reset", reset);
+  // Older installed editors lack lifecycle events. Intercept before their
+  // local-only save / reload handlers, so failure is never reported as success.
+  if (!window.ZAH_EDITOR_EVENTS) {
+    if (save) save.addEventListener("click", function(e) { e.stopImmediatePropagation(); publish(); }, true);
+    var rst = document.getElementById("edReset");
+    if (rst) rst.addEventListener("click", function(e) { e.stopImmediatePropagation(); if (confirm("Reset the page to the original and discard all saved edits?")) reset(); }, true);
+  }
 })();

@@ -241,3 +241,51 @@ by the AI or the editor. If a page ends up with no link to the house at all
 (a client page without a footer, an edit that removed it), `render()` adds a
 small one before `</body>`. `mount({ credit: false })` is the only switch,
 and it is Zah's.
+
+## Publishing and upgrades (0.6.0)
+
+Use `root: 'body'` in both the mount and `ZAH_EDITOR_CFG` to edit the
+header, navigation, main content, footer and mobile contact bar. Zah Editor
+1.2.0 excludes its own toolbar/scripts from edits and undo snapshots.
+
+Normal text, link and style saves are keyed patches. They no longer freeze
+the entire page, so a later source build can add features without discarding
+client text. **Keep explicit `data-zs` keys in source stable.** A source edit
+must not rename a client's edited key or replace it with positional numbering.
+Structural edits still create snapshots; never reset a client snapshot just
+to make a new source build visible. Export it, compare, and migrate deliberately.
+
+Saves carry the rendered version and source hash. A stale tab receives 409
+and keeps its unsaved work visible. Save only reports Published after the
+server confirms. Reset waits for confirmation and successful completion;
+cancelling it sends no request. Server-managed pages do not load an old
+localStorage draft over published content.
+
+Optional settings bindings on page elements:
+
+```html
+<a data-zs="contact.phone" data-zs-setting="phone"
+   data-zs-setting-text data-zs-setting-href="tel"
+   href="tel:+15551234567">555.123.4567</a>
+```
+
+`data-zs-setting-text` binds the visible text; `data-zs-setting-href` supports
+`tel`, `sms`, and `mailto`. `data-zs-setting-prefix="call "` preserves a label
+prefix. Saved setting values update every binding. An editor patch to a bound
+value also updates that setting. With no saved setting, source/overlay text
+remains authoritative.
+
+Authenticated maintenance endpoints:
+
+- `GET /zah-site/export` exports current content/settings; `?version=N` exports
+  a history version. Treat exports as private client data.
+- `POST /zah-site/rebase` atomically replaces one old snapshot with reviewed
+  keyed edits on the current source. Requires `page`, `baseVersion`, SHA-256
+  `sourceHash`, `edits` (keyed patch object), and
+  `confirm: "replace-snapshot-with-reviewed-edits"`. The complete previous
+  state remains in history; concurrent changes refuse with 409. Export and
+  compare first. This is a maintenance operation, not a routine deploy step.
+
+MCP is standard Streamable HTTP. Any compatible AI client can use the endpoint
+with a Bearer token; a keyed URL supports clients without custom headers.
+Keep these URLs/tokens out of shared reports and source control.
