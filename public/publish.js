@@ -54,8 +54,9 @@
       var d = await post("snapshot", { page: page, root: rootSel, html: html, baseHtml: baseHtml === null ? undefined : baseHtml, baseVersion: version, sourceHash: sourceHash });
       version = d.version; baseHtml = html;
       try { localStorage.removeItem(CFG.storageKey); } catch (e) {}
-      document.dispatchEvent(new CustomEvent("zah-editor:published"));
-      note("Published v" + d.version);
+      var result = {};
+      document.dispatchEvent(new CustomEvent("zah-editor:published", { detail: result }));
+      note("Published v" + d.version + (result.unsaved ? " — newer edits remain unsaved" : ""));
     } catch (e) { note(e.message || "Not published. Check your connection and try again."); }
     finally { busy = false; if (save) save.disabled = false; }
   }
